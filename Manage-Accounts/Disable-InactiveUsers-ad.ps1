@@ -229,20 +229,7 @@ $Notify=@{
 From=$AcctMgmt
 SMTPServer="SMTP"
 }
-#$active=import-csv $splunkdata # Get active users - According to SPLUNK
-#$active|export-csv -path "$logdir\Active_$datestring.csv"
-#$inactive=get-qaduser -sizelimit 0 -dontusedefaultincludedproperties -disabled:$false -notloggedonfor:23 -notmemberof exc.accounts -ldapfilter "(!(name=*$))"|select-object @{name="AccountsInSPLUNK";Expression={$_.samaccountname}}
-# Changed variable name instead of recoding
-#$tocheck = get-qaduser -sizelimit 0 -includedproperties admincount,useraccountcontrol,carlicense -disabled:$false -notloggedonfor:23 -notmemberof exc.logon -ldapfilter "(!(name=*$))")
 
-
-# SPLUNK removed from processing
-
-<# if($inactive.count -ne 0)
-{
-	$tocheck=(Compare-Object -ReferenceObject $inactive -DifferenceObject $active -Property AccountsInSPLUNK -includeequal|?{$_.sideindicator -like "*="}|%{Get-QADUser $_.AccountsInSPLUNK -properties admincount,url,useraccountcontrol,carlicense})
-}
-#>
 
 $global:msgbody=@"
 You are receiving this message because the above named account is within a week of being out of compliance.`n
@@ -338,14 +325,13 @@ Automated Account Management Process
 		Else
 		{
 			try{
-				$userdesc=(get-qaduser $check).description
+				$userdesc=(get-aduser $check).description
 				sendl "Disable user $check.  Last logon: $logondate"
-				disable-qaduser $check
+				disable-adaccount $check
 				sendl "Set $check description"
-				set-qaduser $check -description "$userdesc - $setdesc"
+				set-aduser $check -description "$userdesc - $setdesc"
 				sendl "Add disable date for reference"
-				#set-qaduser $check -objectattributes @{url=@{Append=@("Disabled $today")}}
-				set-qaduser $check -objectattributes @{carlicense=@{Update=@($date)}}
+				set-aduser $check -objectattributes @{carlicense=@{Update=@($date)}}
 				$disabled+=(get-qaduser $check)
 				$body=@"
 $salutation,`n
