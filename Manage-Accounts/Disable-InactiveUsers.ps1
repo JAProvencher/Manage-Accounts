@@ -98,31 +98,37 @@ function sendl ([string]$message) # Send to log file
 {
 	$toOutput = "$(get-date) > $message " | Out-File $logpath -append -NoClobber
 }
-
-
 #*******************************************************************************************************
 # Gets the user's most current logon date/time.  If the user hasn't logged on, the function
 # returns the date the account was created.  This will help avoid having stale accounts that were
 # created but never used.
 #
-
 function Get-ADUserLastLogon
 {
-[cmdletbinding()]
-	param($user)
-	$dcs=get-addomaincontroller -filter *|Select-Object -expandproperty hostname|Where-Object {test-connection -computername $_ -count 1 -ea 0}
-	$llo=0
-	$tmptime=0
-	$wc=$user.whencreated.tofiletime()
-	foreach($dc in $dcs)
-	{
-		$tmptime=(get-aduser $user -property lastlogon -server $dc).lastlogon
-		$llo=$llo,$tmptime|Sort-Object -descending|Select-Object -first 1
-	}
-	$llo=$llo,$user.lastlogontimestamp,$wc,$user."msDS-LastSuccessfulInteractiveLogonTime"|Sort-Object -descending|Select-Object -first 1
-	$llo=[datetime]::fromfiletime($llo)
-	if(!$user.lastlogontimestamp){$llo=$llo.adddays(30)}
-	return $llo
+        [CmdletBinding()]
+        param($userName)
+
+        $dcs = Get-qadcomputer -computerrole domaincontroller
+        $time = 0
+        foreach($dc in $dcs)
+        {
+                $hostname = $dc.dnsHostName
+                $user = Get-qADUser $userName -service $hostname
+                if($user.LastLogon -gt $time)
+                {
+                        $time = $user.LastLogon
+
+                }
+        }
+        if($user.lastlogontimestamp -gt $time)
+        {
+                $time=$user.lastlogontimestamp
+        }
+        if($time -eq 0)
+        {
+                $time="Never"
+		}
+        return $time
 }
 #*******************************************************************************************************
 # Get the appropriate action for the user.  Makes call to Get-ADUserLastLogon. 
@@ -229,6 +235,20 @@ $Notify=@{
 From=$AcctMgmt
 SMTPServer="SMTP"
 }
+$active=import-csv $splunkdata # Get active users - According to SPLUNK
+$active|export-csv -path "$logdir\Active_$datestring.csv"
+#$inactive=get-qaduser -sizelimit 0 -dontusedefaultincludedproperties -disabled:$false -notloggedonfor:23 -notmemberof exc.accounts -ldapfilter "(!(name=*$))"|select-object @{name="AccountsInSPLUNK";Expression={$_.samaccountname}}
+# Changed variable name instead of recoding
+$tocheck = get-qaduser -sizelimit 0 -includedproperties admincount,useraccountcontrol,carlicense -disabled:$false -notloggedonfor:23 -notmemberof exc.logon -ldapfilter "(!(name=*$))"
+
+
+# SPLUNK removed from processing
+
+<# if($inactive.count -ne 0)
+{
+	$tocheck=(Compare-Object -ReferenceObject $inactive -DifferenceObject $active -Property AccountsInSPLUNK -includeequal|?{$_.sideindicator -like "*="}|%{Get-QADUser $_.AccountsInSPLUNK -properties admincount,url,useraccountcontrol,carlicense})
+}
+#>
 
 $global:msgbody=@"
 You are receiving this message because the above named account is within a week of being out of compliance.`n
@@ -271,7 +291,7 @@ Click here: https://newportalv3.nwpt.nuwc.navy.mil.  If the link is not clickabl
 		# Set up body of outgoing message - Warning user
 		$body=@"
 $salutation,`n
-Account $check will be disabled in $D2D days
+Account $check will be disabled in $D2D days.`n
 Last recorded logon: $logondate`n
 $note`n
 $msgbody`n
@@ -299,7 +319,7 @@ $Notify.Body=$body
 	sendl "$("*"*80)"
 	}
 	#Disable account and notify user.  
-	"Disable" {			
+	"Disable" {
 		if(is-admin $check){			#Is the account protected by AdminSDHolder?  If so, notify AMT
 			$notify.To=$AcctMgmt
 			$body=@"
@@ -324,14 +344,14 @@ Automated Account Management Process
 		Else
 		{
 			try{
-				$userdesc=(get-aduser $check).description
+				$userdesc=(get-qaduser $check).description
 				sendl "Disable user $check.  Last logon: $logondate"
-				disable-adaccount $check
+				disable-qaduser $check
 				sendl "Set $check description"
-				set-aduser $check -description "$userdesc - $setdesc"
+				set-qaduser $check -description "$userdesc - $setdesc"
 				sendl "Add disable date for reference"
-		#Find syntax		set-qaduser $check -objectattributes @{carlicense=@{Update=@($date)}}
-				$disabled+=(get-aduser $check)
+				set-qaduser $check -objectattributes @{carlicense=@{Update=@($date)}}
+				$disabled+=(get-qaduser $check)
 				$body=@"
 $salutation,`n
 Account $check has been disabled.  If action is not taken, it will be marked for deletion on $((get-date).adddays(15).toshortdatestring())
