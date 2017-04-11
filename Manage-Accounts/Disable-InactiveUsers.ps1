@@ -105,30 +105,21 @@ function sendl ([string]$message) # Send to log file
 #
 function Get-ADUserLastLogon
 {
-        [CmdletBinding()]
-        param($userName)
-
-        $dcs = Get-qadcomputer -computerrole domaincontroller
-        $time = 0
-        foreach($dc in $dcs)
-        {
-                $hostname = $dc.dnsHostName
-                $user = Get-qADUser $userName -service $hostname
-                if($user.LastLogon -gt $time)
-                {
-                        $time = $user.LastLogon
-
-                }
-        }
-        if($user.lastlogontimestamp -gt $time)
-        {
-                $time=$user.lastlogontimestamp
-        }
-        if($time -eq 0)
-        {
-                $time="Never"
-		}
-        return $time
+[cmdletbinding()]
+	param($user)
+	$dcs=get-addomaincontroller -filter *|Select-Object -expandproperty hostname|Where-Object {test-connection -computername $_ -count 1 -ea 0}
+	$llo=0
+	$tmptime=0
+	$wc=$user.whencreated
+	foreach($dc in $dcs)
+	{
+		$tmptime=(get-aduser $user -property lastlogon -server $dc).lastlogon
+		$llo=$llo,$tmptime|Sort-Object -descending|Select-Object -first 1
+	}
+	$llo=$llo.tofiletime(),$user.lastlogontimestamp,$wc.tofiletime(),$user."msDS-LastSuccessfulInteractiveLogonTime"|Sort-Object -descending|Select-Object -first 1
+	
+	if(!$user.lastlogontimestamp){$llo=$llo.adddays(30)}
+	return $llo
 }
 #*******************************************************************************************************
 # Get the appropriate action for the user.  Makes call to Get-ADUserLastLogon. 
@@ -214,19 +205,6 @@ LogfileCheck
 sendl "$("*"*80)"
 sendl "Beginning $scriptname version $version"
 sendl "$("*"*80)"
-try
-{
-	if ((Get-PSSnapin -name Quest.Activeroles.Admanagement) -eq $null)
-	{
-		Add-PSSnapin Quest.Activeroles.Admanagement -erroraction stop
-		sendl "Quest snapin loaded"
-	}
-}
-catch
-{
-	sendl "An error occured loading the AD Snapin"
-	break
-}
 
 sendl "Loading variables"
 
@@ -235,20 +213,8 @@ $Notify=@{
 From=$AcctMgmt
 SMTPServer="SMTP"
 }
-$active=import-csv $splunkdata # Get active users - According to SPLUNK
-$active|export-csv -path "$logdir\Active_$datestring.csv"
-#$inactive=get-qaduser -sizelimit 0 -dontusedefaultincludedproperties -disabled:$false -notloggedonfor:23 -notmemberof exc.accounts -ldapfilter "(!(name=*$))"|select-object @{name="AccountsInSPLUNK";Expression={$_.samaccountname}}
-# Changed variable name instead of recoding
-$tocheck = get-qaduser -sizelimit 0 -includedproperties admincount,useraccountcontrol,carlicense -disabled:$false -notloggedonfor:23 -notmemberof exc.logon -ldapfilter "(!(name=*$))"
 
-
-# SPLUNK removed from processing
-
-<# if($inactive.count -ne 0)
-{
-	$tocheck=(Compare-Object -ReferenceObject $inactive -DifferenceObject $active -Property AccountsInSPLUNK -includeequal|?{$_.sideindicator -like "*="}|%{Get-QADUser $_.AccountsInSPLUNK -properties admincount,url,useraccountcontrol,carlicense})
-}
-#>
+$tocheck = get-aduser -filter {enabled -eq $true -and name -notlike "*$"} -properties *|?{$_.lastlogondate -lt (get-date).adddays(-23) -and $_.distinguishedname -notin @((get-adgroupmember -identity exc.logon).distinguishedname)}
 
 $global:msgbody=@"
 You are receiving this message because the above named account is within a week of being out of compliance.`n
@@ -274,7 +240,7 @@ sendl "$("*"*80)"
 	
 Foreach ($check in $tocheck)
 {
-	if($check.domain.name -eq "nwpt"){$note=@"
+	if($check.canonicalname.split('.')[0] -eq "nwpt"){$note=@"
 This is the account used to access Newportal, loss of which will inhibit access to NUWCDIVNPT resources.
 Click here: https://newportalv3.nwpt.nuwc.navy.mil.  If the link is not clickable, copy and paste it into your browser.
 "@
