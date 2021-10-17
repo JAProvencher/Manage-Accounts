@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Automated account management and reporting
+Automated account management and reporting
 
 .DESCRIPTION
 	This script will collect objects for each user account in Active Directory.
