@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
 Automated account management and reporting
+Github Test
 
 .DESCRIPTION
 	This script will collect objects for each user account in Active Directory.
